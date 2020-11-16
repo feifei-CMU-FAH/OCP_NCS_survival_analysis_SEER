@@ -1,0 +1,310 @@
+library(descr)
+library(dplyr)
+
+op<- read.delim("~/Analysis/op ext 1998-2016 seer18 surv.txt", header = F)
+names(op)<- c("ID","agegp", "sex", "yeardx", "state_county", "primary_site_labeled", "primary_site", "lymphoma_subtype", "HISTO_T3", "HISTO_M3", "grade", 
+              "laterality", "summary_stage_2000", "surg_prim_site", "radiation_surgery", "reason_no_surgery", "radiation", "chemo", "regional_nodes_examined", "regional_nodes_positive", "death_classification", 
+              "survival_months", "first_malignant_primary", "age", "agedx", "race", "marital_status", "percent_le_high_school", "percent_families_below_poverty", "percent_unemployed", "median_household_income", 
+              "percent_foreign_born", "ruca13")
+
+# year dx to 1998+ 
+op<- subset(op, yeardx>= 1998 & yeardx<= 2011)
+# 14 years
+
+# add broad group indicator
+op$broad_group = NA
+op$broad_group[op$primary_site %in% c(0:9, 19:29, 79:89, 40:49, 30:39, 50:59, 60:69)] = "Oral cavity"
+op$broad_group[op$primary_site %in% c(110:119, 90:99, 100:109, 129, 130:139, 140)] = "Pharynx"
+op$broad_group[op$primary_site %in% c(142)] = "Waldeyers ring"
+op$broad_group[op$primary_site %in% c(148)] = "Overlapping lesion"
+op$broad_group[op$primary_site %in% c(300, 310:313, 318, 319)] = "Nasal cavity and sinus"
+
+freq(op$broad_group, plot = F)
+op$broad_group<- factor(op$broad_group, levels = c("Oral cavity", "Pharynx", "Waldeyers ring", "Overlapping lesion", "Nasal cavity and sinus"))
+
+# add lymphoma indicator
+op$lymphoma = substr(op$lymphoma_subtype, 1, 1)
+op$lymphoma[op$lymphoma== "1"] = "Hodgkin lymphoma"
+op$lymphoma[op$lymphoma== "2"] = "Non-Hodgkin lymphoma"
+op$lymphoma[op$lymphoma== "3"] = "Composite"
+op$lymphoma[op$lymphoma== "4"] = "Lymphoid neoplasm"
+op$lymphoma<- factor(op$lymphoma, levels = c("Non-Hodgkin lymphoma", "Hodgkin lymphoma", "Lymphoid neoplasm", "Composite"))
+freq(op$lymphoma, plot = F)
+op<- op[!is.na(op$lymphoma), ]
+
+# recode age to 10 year gp
+op <- op%>%
+  mutate(agegp= ifelse(agedx<=19, "0-19 years", ifelse(agedx>=20&agedx<=39, "20-39 years", ifelse(agedx>=40&agedx<=59, "40-59 years", ifelse(agedx>=60&agedx<=79, "60-79 years", ifelse(agedx>=80, "80+ years", NA))))))
+# freq(op$agegp, plot = F)
+
+# recode race
+op <- op%>%
+  mutate(race= ifelse(race=="Hispanic (All Races)", "Hispanic", ifelse(race == "Non-Hispanic American Indian/Alaska Native", "AIAN", ifelse(race == "Non-Hispanic Asian or Pacific Islander", "API", ifelse(race == "Non-Hispanic Black", "Black", ifelse(race == "Non-Hispanic White", "White", NA))))))
+op$race<- factor(op$race, levels = c("White", "Black", "Hispanic", "API", "AIAN"))
+
+# create quintiles for SES variables
+names(op[, 27:31])
+op[, 27:31] <- op[, 27:31] %>% mutate_if(is.factor, as.character)
+op[, 27:31] <- op[, 27:31] %>% mutate_if(is.character, as.numeric)
+
+op$hs5<- cut(op$percent_le_high_school, breaks=c(quantile(op$percent_le_high_school, na.rm = T, probs = seq(0, 1, by = 0.2))), labels=c("Q1","Q2","Q3","Q4", "Q5"))
+op$hs5[op$percent_le_high_school==min(op$percent_le_high_school, na.rm = T)]<-"Q1"
+quantile(op$percent_le_high_school, na.rm = T, probs = seq(0, 1, by = 0.2))
+
+op$inc5<- cut(op$median_household_income, breaks=c(quantile(op$median_household_income, na.rm = T, probs = seq(0, 1, by = 0.2))), labels=c("Q1","Q2","Q3","Q4", "Q5"))
+op$inc5[op$median_household_income==min(op$median_household_income, na.rm = T)]<-"Q1"
+quantile(op$median_household_income, na.rm = T, probs = seq(0, 1, by = 0.2))
+
+# recode radiation & surgery
+op$radiation_surgery_recode <- NA
+op$radiation_surgery_recode[op$radiation_surgery == "No radiation and/or cancer-directed surgery"]<- "None"
+op$radiation_surgery_recode[op$radiation_surgery %in% c("Radiation after surgery", "Radiation before and after surgery", "Radiation prior to surgery", "Sequence unknown, but both were given")]<- "Both"
+
+# recode radiation
+op$radiation_recode<- "Yes"
+op$radiation_recode[op$radiation == "None/Unknown"]<- "No"
+op$radiation_recode[op$radiation == "Refused (1988+)"]<- NA
+
+# recode surgery
+op$surgery_recode<- "No"
+op$surgery_recode[op$reason_no_surgery == "Surgery performed"]<- "Yes"
+op$surgery_recode[op$reason_no_surgery %in% c("Recommended, unknown if performed", "Unknown; death certificate; or autopsy only (2003+)")]<- NA
+
+# create a new radiation, surgery & chemo variable
+op$radiation_surgery_chemo<- NA
+# freq(op$radiation_recode, plot = F)
+# freq(op$chemo, plot = F)
+# freq(op$surgery_recode, plot = F)
+
+op$radiation_surgery_chemo[op$radiation_recode == "Yes" & op$chemo == "Yes" & op$surgery_recode == "Yes"]<- "All"
+op$radiation_surgery_chemo[op$radiation_recode == "Yes" & op$chemo == "Yes" & op$surgery_recode == "No"]<- "Radiation and chemo"
+op$radiation_surgery_chemo[op$radiation_recode == "Yes" & op$chemo == "No/Unknown" & op$surgery_recode == "Yes"]<- "Radiation and surgery"
+op$radiation_surgery_chemo[op$radiation_recode == "No" & op$chemo == "Yes" & op$surgery_recode == "Yes"]<- "Chemo and surgery"
+op$radiation_surgery_chemo[op$radiation_recode == "Yes" & op$chemo == "No/Unknown" & op$surgery_recode == "No"]<- "Radiation only"
+op$radiation_surgery_chemo[op$radiation_recode == "No" & op$chemo == "Yes" & op$surgery_recode == "No"]<- "Chemo only"
+op$radiation_surgery_chemo[op$radiation_recode == "No" & op$chemo == "No/Unknown" & op$surgery_recode == "Yes"]<- "Surgery only"
+op$radiation_surgery_chemo[op$radiation_recode == "No" & op$chemo == "No/Unknown" & op$surgery_recode == "No"]<- "None"
+
+freq(op$radiation_surgery_chemo, plot = F)
+op$radiation_surgery_chemo<- factor(op$radiation_surgery_chemo, levels = c("None", "Radiation only", "Surgery only", "Chemo only", "Radiation and surgery", "Chemo and surgery", "Radiation and chemo", "All"))
+
+# recode grade
+op$grade_recode<- recode_factor(op$grade, "B-cell; pre-B; B-precursor" = "B-cell, T-cell or NK cell", "Moderately differentiated; Grade II" = "Grade II", "NK cell; natural killer cell (1995+)" = "B-cell, T-cell or NK cell", "Poorly differentiated; Grade III" = "Grade III", "T-cell" = "B-cell, T-cell or NK cell", "Undifferentiated; anaplastic; Grade IV" = "Grade IV", "Well differentiated; Grade I"= "Grade I", "Null cell; non T-non B" = "Unknown", "Unknown" = "Unknown")
+op$grade_recode<- factor(op$grade_recode, levels = c("B-cell, T-cell or NK cell", "Grade I", "Grade II", "Grade III", "Grade IV", "Unknown"))
+freq(op$grade_recode, plot = F)
+
+# recode death classification
+freq(op$death_classification, plot = F)
+op$dead = 0
+op$dead[op$death_classification == "Dead (attributable to this cancer dx)"] = 1
+freq(op$dead, plot = F)
+
+# recode survial month
+op$survival_months<- as.numeric(as.character(op$survival_months))
+summary(op$survival_months)
+
+# create a 5-year survival indicator
+op$survival_months_5yr<- op$survival_months
+op$survival_months_5yr[op$survival_months>=60] = 60
+summary(op$survival_months_5yr)
+op<- subset(op, survival_months_5yr > 0)
+
+# create a 2-year survival indicator
+op$survival_months_2yr<- op$survival_months
+op$survival_months_2yr[op$survival_months>=24] = 24
+summary(op$survival_months_2yr)
+
+# complete cases only
+op_clean<- subset(op, broad_group != "Overlapping lesion" & lymphoma!= "Composite" & summary_stage_2000 %in% c("Distant", "Localized", "Regional") & race!= "NA" & radiation_surgery_chemo!="NA" & hs5!= "NA" & inc5!= "NA")
+op_clean$agegp_num<- as.numeric(as.character(recode_factor(op_clean$agegp, "0-19 years" = "1", "20-39 years" = "2", "40-59 years" = "3", "60-79 years" = "4", "80+ years" = "5")))
+op_clean$stage_num<- as.numeric(as.character(recode_factor(op_clean$summary_stage_2000, "Localized" = "1", "Regional" = "2", "Distant" = "3")))
+op_clean$hs5_num<- as.numeric(as.character(substr(op_clean$hs5, 2, 2)))
+op_clean$inc5_num<- as.numeric(as.character(substr(op_clean$inc5, 2, 2)))
+
+# 5-year survival
+## Figure 1. K-M survival curves
+library(survival)
+summary(op$survival_months_5yr)
+op$SurvObj <- with(op, Surv(survival_months_5yr, dead == 1))
+op_clean$SurvObj <- with(op_clean, Surv(survival_months_5yr, dead == 1))
+
+#By lymphoma type
+op_lymphoma_data<- subset(op, lymphoma %in% c("Non-Hodgkin lymphoma", "Hodgkin lymphoma", "Lymphoid neoplasm"))
+op_lymphoma_data$lymphoma_num<- as.numeric(recode_factor(op_lymphoma_data$lymphoma, "Non-Hodgkin lymphoma" = "1", "Hodgkin lymphoma" = "2", "Lymphoid neoplasm" = "3"))
+op_lymphoma <- survfit(SurvObj ~ lymphoma_num, data = op_lymphoma_data, conf.type = "log-log")
+
+lymphoma_km <- survfit(SurvObj ~ lymphoma_num, data = op_lymphoma_data, conf.type = "log-log")
+par(mar=c(5,5,5,5))
+plot(lymphoma_km, pch= 18, lty = c(1,2,3),col=c("black", "black", "black"), 
+     xlab="Survival Months", ylab="Survival Probability",
+     ylim=c(.5, 1), yaxt = "n", cex.lab = 1.5)
+axis(2, at=seq(0.5,1,.1),labels=seq(50,100,10), cex.axis = 1.5)
+layout(rbind(1,2,3), heights=c(17,1))  # put legend on bottom 1/8th of the chart
+legend('center','groups', legend=c("Non-Hodgkin lymphoma", "Hodgkin lymphoma", "Lymphoid neoplasm"),
+       col=c("black", "black", "black"), lty=c(1,2,3), cex=1, ncol = 3, bty = "n")
+
+# By site
+op_site_data<- subset(op, broad_group != "Overlapping lesion")
+op_site_data$broad_group_num<- as.numeric(recode_factor(op_site_data$broad_group, "Oral cavity" = "1", "Pharynx" = "2", "Waldeyers ring" = "3", "Nasal cavity and sinus" = "4"))
+op_site <- survfit(SurvObj ~ broad_group_num, data = op_site_data, conf.type = "log-log")
+
+site_km <- survfit(SurvObj ~ broad_group_num, data = op_site_data, conf.type = "log-log")
+par(mar=c(5,5,5,5))
+plot(site_km, pch= 18, lty = c(1,2,3,4),col=c("black", "black", "black", "black"), 
+     xlab="Survival Months", ylab="Survival Probability",
+     ylim=c(.5, 1), yaxt = "n", cex.lab = 1.2)
+axis(2, at=seq(0.5,1,.1),labels=seq(50,100,10), cex.axis = 1.2)
+layout(rbind(1,2,3), heights=c(17,1))  # put legend on bottom 1/8th of the chart
+legend('center','groups', legend=c("Oral cavity", "Pharynx", "Waldeyers ring", "Nasal cavity and sinus"),
+       col=c("black", "black", "black", "black"), lty=c(1,2,3,4), cex=1, ncol = 4, bty = "n")
+
+# By treatment
+op_treatment_data<- op
+op_treatment_data$treatment_num<- as.numeric(recode_factor(op_treatment_data$radiation_surgery_chemo, "None" = "1", "Radiation only" = "2", "Surgery only" = "3", "Chemo only" = "4", "Radiation and surgery" = "5", "Chemo and surgery" = "6", "Radiation and chemo" = "7", "All" = "8"))
+op_treatment <- survfit(SurvObj ~ treatment_num, data = op_treatment_data, conf.type = "log-log")
+# "None", "Radiation only", "Surgery only", "Chemo only", "Radiation and surgery", "Chemo and surgery", "Radiation and chemo", "All"
+treatmet_km <- survfit(SurvObj ~ treatment_num, data = op_treatment_data, conf.type = "log-log")
+par(mar=c(5,5,5,5))
+plot(treatmet_km, pch= 18, lty = c(1:8),col=c("black", "red", "orange", "blue", "purple", "navy","gray", "green"), 
+     xlab="Survival Months", ylab="Survival Probability",
+     ylim=c(.5, 1), yaxt = "n", cex.lab = 1.2)
+axis(2, at=seq(0.5,1,.1),labels=seq(50,100, 10), cex.axis = 1.2)
+# layout(rbind(1:4), heights=c(10,1))  # put legend on bottom 1/8th of the chart
+legend('bottomleft','groups', legend=c("None", "Radiation only", "Surgery only", "Chemo only", "Radiation and surgery", "Chemo and surgery", "Radiation and chemo", "Radiation, surgery and chemo"),
+       col=c("black", "red", "orange", "blue", "purple", "navy","gray", "green"), lty=c(1:8), cex=1, ncol = 2, bty = "n")
+
+# By stage
+op_stage <- survfit(SurvObj ~ stage_num, data = op_clean, conf.type = "log-log")
+
+stage_km <- survfit(SurvObj ~ stage_num, data = op_clean, conf.type = "log-log")
+par(mar=c(5,5,5,5))
+plot(stage_km, pch= 18, lty = c(1,2,3),col=c("black", "black", "black"), 
+     xlab="Survival Months", ylab="Survival Probability",
+     ylim=c(.5, 1), yaxt = "n", cex.lab = 1.2)
+axis(2, at=seq(0.5,1,.1),labels=seq(50,100,10), cex.axis = 1.2)
+layout(rbind(1,2,3), heights=c(17,1))  # put legend on bottom 1/8th of the chart
+legend('center','groups', legend=c("Localized", "Regional", "Distant"),
+       col=c("black", "black", "black"), lty=c(1,2,3), cex=1, ncol = 3, bty = "n")
+
+## Table 1
+library(table1)
+op_clean$broad_group<- factor(op_clean$broad_group, levels = c("Oral cavity", "Pharynx", "Waldeyers ring", "Nasal cavity and sinus"))
+op_clean$lymphoma<- factor(op_clean$lymphoma, levels = c("Non-Hodgkin lymphoma", "Hodgkin lymphoma", "Lymphoid neoplasm"))
+op_clean$summary_stage_2000<- factor(op_clean$summary_stage_2000, levels = c("Localized", "Regional", "Distant"))
+
+names(op_clean)
+ table1(~ sex + agegp + race + broad_group + lymphoma + radiation_surgery_chemo + summary_stage_2000 + hs5 + inc5| dead, data = op_clean)
+# CrossTable(op_clean$radiation_surgery_chemo, op_clean$race, chisq=TRUE, sresid=T, expected=T, prop.t=F, prop.c=F, prop.r=F, prop.chisq=F)
+ 
+# Univariable log-rank test 
+library(foreach)
+which(colnames(op_clean) %in% c("sex", "agegp", "race", "broad_group", "lymphoma", "radiation_surgery_chemo", "summary_stage_2000", "hs5", "inc5"))
+
+foreach(i = c(which(colnames(op_clean) %in% c("sex", "agegp", "race", "broad_group", "lymphoma", "radiation_surgery_chemo", "summary_stage_2000", "hs5", "inc5")))) %do%
+  survdiff(Surv(survival_months_5yr, dead) ~ op_clean[,i], data= op_clean)
+  
+## SA
+library(survival)
+library("survminer")
+
+# names(op)
+# Multivariable
+res.cox <- coxph(Surv(survival_months_5yr, dead == 1) ~ sex+ agegp + race+ broad_group + lymphoma+ radiation_surgery_chemo+ summary_stage_2000+ yeardx+ hs5+ inc5, data = op_clean, ties = "breslow")
+res.cox
+test.ph <- cox.zph(res.cox)
+test.ph
+
+df1<- data.frame(cbind(exp(res.cox$coefficients), exp(confint(res.cox))))
+names(df1)<- c("HR", "LCI", "UCI")
+df1$HR_CI<- paste0(format(round(df1$HR, digits=2), nsmall = 2), " (", format(round(df1$LCI, digits=2), nsmall = 2), "-", format(round(df1$UCI, digits=2), nsmall = 2), ")")
+
+# LR p-values
+library(lmtest)
+res.cox0 <- coxph(Surv(survival_months_5yr, dead == 1) ~ sex+ agegp + race+ broad_group + lymphoma+ radiation_surgery_chemo+ summary_stage_2000+ yeardx+ hs5+ inc5, data = op_clean, ties = "breslow")
+# res.cox0
+lmtest::lrtest(res.cox0, res.cox)
+
+# trend test
+coxph(Surv(survival_months_5yr, dead == 1) ~ sex+ agegp + race+ broad_group + lymphoma+ radiation_surgery_chemo+ summary_stage_2000+ yeardx+ hs5+ inc5, data = op_clean, ties = "breslow")
+
+# Extract surv prob
+library(rms)
+op_clean$sex<- factor(op_clean$sex, levels = c("Female", "Male"))
+op_clean$agegp<- factor(op_clean$agegp, levels = c("0-19 years", "20-39 years", "40-59 years", "60-79 years", "80+ years"))
+op_clean$lymphoma<- factor(op_clean$lymphoma, levels = c("Non-Hodgkin lymphoma", "Hodgkin lymphoma", "Lymphoid neoplasm"))
+
+cfit <- cph(Surv(survival_months_5yr, dead == 1) ~ sex, data = op_clean, surv=TRUE)
+survprob1 = data.frame(survest(cfit, newdata= expand.grid(sex = levels(op_clean$sex)), times= c(0, 24, 60))$surv)
+
+## Interaction model
+# Data of only oral cavity and pharynx
+res.cox0 <- coxph(Surv(survival_months_5yr, dead == 1) ~ sex+ agegp + race+ broad_group + lymphoma+ radiation_surgery_chemo+ summary_stage_2000+ yeardx+ hs5+ inc5, data = op_clean, ties = "breslow")
+
+res.coxi1 <- coxph(Surv(survival_months_5yr, dead == 1) ~ sex+ agegp + race+ broad_group + lymphoma+ radiation_surgery_chemo* summary_stage_2000+ yeardx+ hs5+ inc5, data = op_clean, ties = "breslow")
+# res.coxi1
+lmtest::lrtest(res.cox0, res.coxi1)
+op_clean$Count = 1
+counti1<- aggregate(Count~ dead + radiation_surgery_chemo+ summary_stage_2000, sum, data = op_clean)
+
+dfi1<- data.frame(cbind(exp(res.coxi1$coefficients), exp(confint(res.coxi1))))
+names(dfi1)<- c("HR", "LCI", "UCI")
+dfi1$HR_CI<- paste0(format(round(dfi1$HR, digits=2), nsmall = 2), " (", format(round(dfi1$LCI, digits=2), nsmall = 2), "-", format(round(dfi1$UCI, digits=2), nsmall = 2), ")")
+
+res.coxi2 <- coxph(Surv(survival_months_5yr, dead == 1) ~ sex+ agegp + race+ broad_group + lymphoma*radiation_surgery_chemo+ summary_stage_2000+ yeardx+ hs5+ inc5, data = op_clean, ties = "breslow")
+# res.coxi2
+lmtest::lrtest(res.cox0, res.coxi2)
+
+dfi2<- data.frame(cbind(exp(res.coxi2$coefficients), exp(confint(res.coxi2))))
+names(dfi2)<- c("HR", "LCI", "UCI")
+dfi2$HR_CI<- paste0(format(round(dfi2$HR, digits=2), nsmall = 2), " (", format(round(dfi2$LCI, digits=2), nsmall = 2), "-", format(round(dfi2$UCI, digits=2), nsmall = 2), ")")
+
+res.coxi3 <- coxph(Surv(survival_months_5yr, dead == 1) ~ sex+ agegp + race+ broad_group + lymphoma*summary_stage_2000+ radiation_surgery_chemo+ yeardx+ hs5+ inc5, data = op_clean, ties = "breslow")
+# res.coxi3
+lmtest::lrtest(res.cox0, res.coxi3)
+
+dfi3<- data.frame(cbind(exp(res.coxi3$coefficients), exp(confint(res.coxi3))))
+names(dfi3)<- c("HR", "LCI", "UCI")
+dfi3$HR_CI<- paste0(format(round(dfi3$HR, digits=2), nsmall = 2), " (", format(round(dfi3$LCI, digits=2), nsmall = 2), "-", format(round(dfi3$UCI, digits=2), nsmall = 2), ")")
+
+## Subgroup
+# Oral cavity
+res.cox_oc<- coxph(Surv(survival_months_5yr, dead == 1) ~ sex + 
+                   agegp + race+ lymphoma+ radiation_surgery_chemo+ summary_stage_2000+ yeardx+ hs5+ inc5, data = subset(op_clean, broad_group=="Oral cavity"), ties = "breslow")
+res.cox_oc
+
+df2<- data.frame(cbind(exp(res.cox_oc$coefficients), exp(confint(res.cox_oc))))
+names(df2)<- c("HR", "LCI", "UCI")
+df2$HR_CI<- paste0(format(round(df2$HR, digits=2), nsmall = 2), " (", format(round(df2$LCI, digits=2), nsmall = 2), "-", format(round(df2$UCI, digits=2), nsmall = 2), ")")
+
+res.cox_oc0<- coxph(Surv(survival_months_5yr, dead == 1) ~ sex + 
+                   agegp + race+ lymphoma+ radiation_surgery_chemo+ summary_stage_2000+ yeardx+ hs5+ inc5, data = subset(op_clean, broad_group=="Oral cavity"), ties = "breslow")
+lmtest::lrtest(res.cox_oc0, res.cox_oc)
+
+# Pharynx
+res.cox_ph<- coxph(Surv(survival_months_5yr, dead == 1) ~ sex + 
+                   agegp + race+ lymphoma+ radiation_surgery_chemo+ summary_stage_2000+ yeardx+ hs5+ inc5, data = subset(op_clean, broad_group=="Pharynx"), ties = "breslow")
+res.cox_ph
+
+df3<- data.frame(cbind(exp(res.cox_ph$coefficients), exp(confint(res.cox_ph))))
+names(df3)<- c("HR", "LCI", "UCI")
+df3$HR_CI<- paste0(format(round(df3$HR, digits=2), nsmall = 2), " (", format(round(df3$LCI, digits=2), nsmall = 2), "-", format(round(df3$UCI, digits=2), nsmall = 2), ")")
+
+res.cox_ph0<- coxph(Surv(survival_months_5yr, dead == 1) ~ sex + 
+                   agegp + race+ lymphoma+ radiation_surgery_chemo+ summary_stage_2000+ yeardx+ hs5 + inc5, data = subset(op_clean, broad_group=="Pharynx"), ties = "breslow")
+lmtest::lrtest(res.cox_ph0, res.cox_ph)
+
+
+# trend test
+coxph(Surv(survival_months_5yr, dead == 1) ~ sex + 
+                   agegp + race+ lymphoma+ radiation_surgery_chemo+ summary_stage_2000+ yeardx+ hs5+ inc5_num, data = subset(op_clean, broad_group=="Oral cavity"), ties = "breslow")
+lmtest::lrtest(res.cox_oc0, res.cox_oc)
+
+coxph(Surv(survival_months_5yr, dead == 1) ~ sex + 
+                   agegp + race+ lymphoma+ radiation_surgery_chemo+ summary_stage_2000+ yeardx+ hs5+ inc5, data = subset(op_clean, broad_group=="Pharynx"), ties = "breslow")
+
+
+op_oc_data<- subset(op_clean, broad_group == "Oral cavity")
+ table1(~ sex + agegp + race + lymphoma + radiation_surgery_chemo + summary_stage_2000 + hs5 + inc5| dead, data = op_oc_data)
+
+ op_ph_data<- subset(op_clean, broad_group == "Pharynx")
+ table1(~ sex + agegp + race + lymphoma + radiation_surgery_chemo + summary_stage_2000 + hs5 + inc5| dead, data = op_ph_data)
